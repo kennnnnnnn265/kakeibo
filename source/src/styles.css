@@ -109,3 +109,24 @@ textarea.notes { width: 100%; min-height: 70px; border: 1px solid var(--paper-li
   textarea, input { border: none !important; background: transparent !important; }
   .stamp { transform: none; }
 }
+.food-hint { font-size: 10.5px; color: var(--ink-soft); text-align: right; margin-bottom: 5px; cursor: pointer; }
+.food-detail { padding: 8px 10px 10px; }
+.food-totals { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.food-total-chip { font-size: 11.5px; background: #FFFDF6; border: 1px solid var(--paper-line); border-radius: 12px; padding: 3px 9px; }
+.food-total-chip b { font-family: 'Roboto Mono', monospace; }
+.food-total-chip.off { opacity: 0.6; }
+.food-sum { font-size: 12px; color: var(--ink-soft); margin-bottom: 8px; }
+.food-sum b { color: var(--ink); font-family: 'Roboto Mono', monospace; font-size: 14px; }
+.food-form input[name=memo] { flex: 2 1 150px; }
+.food-form input[name=amount] { flex: 1 1 96px; }
+.sub-chips { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.sub-chip { font-family: inherit; font-size: 13px; padding: 6px 12px; border-radius: 16px; border: 1px solid var(--paper-line); background: #FFFDF6; color: var(--ink); cursor: pointer; }
+.sub-chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.setup-link { display: block; margin: 10px 0 0 auto; background: none; border: none; color: var(--ink-soft); font-size: 11px; text-decoration: underline; cursor: pointer; font-family: inherit; }
+.sub-setup { margin-top: 8px; background: #FFFDF6; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; }
+.sub-setup-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 5px 0; }
+.sub-setup-row input { width: 18px; height: 18px; }
+.sub-add { display: flex; gap: 8px; margin-top: 6px; }
+.sub-add input { flex: 1; min-width: 0; font-family: inherit; font-size: 16px; border: 1px solid var(--paper-line); border-radius: 6px; padding: 6px 8px; background: #FFFDF6; color: var(--ink); }
+.sub-add button { font-family: inherit; font-size: 13px; border-radius: 6px; padding: 6px 12px; border: 1px solid var(--paper-line); cursor: pointer; }
+@media print { .food-form, .setup-link, .sub-setup, .food-hint { display: none !important; } }

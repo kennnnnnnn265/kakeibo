@@ -51,6 +51,15 @@ const BALANCE_FIELDS = [
   { key: "bank77_2", label: "七十七銀行②" },
 ];
 
+// 食費の内訳（アプリ内でオン・オフ・追加できる）。key は "food"（基本）または "food:xxx"
+const DEFAULT_FOOD_SUBS = [
+  { key: "food", label: "食費", on: true },
+  { key: "food:daily", label: "日用品", on: true },
+  { key: "food:pet", label: "ペット費", on: false },
+  { key: "food:baby", label: "赤ちゃん費", on: false },
+];
+const isFood = (cat) => cat === "food" || String(cat).startsWith("food:");
+
 const PIE_COLORS = ["#22304A", "#8C5A3C", "#B23A2F", "#6B7F5E", "#7C6A9C", "#C9A15A", "#4A6B7C", "#8A8F5C"];
 // 推移グラフの色（固定費・変動費・貯蓄）
 const TREND_COLORS = { fixed: "#22304A", variable: "#C9A15A", savings: "#6B7F5E", budget: "#B23A2F" };
@@ -94,6 +103,7 @@ function emptySettings() {
     fixedBudget: Object.fromEntries(FIXED_CATEGORIES.map(f => [f.key, 0])),
     fixedActual: Object.fromEntries(FIXED_CATEGORIES.map(f => [f.key, 0])),
     variableBudget: Object.fromEntries(VARIABLE_CATEGORIES.map(f => [f.key, 0])),
+    foodSubs: DEFAULT_FOOD_SUBS,
   };
 }
 function mergeSettings(saved) {
@@ -104,6 +114,7 @@ function mergeSettings(saved) {
     fixedBudget: { ...base.fixedBudget, ...(saved.fixedBudget || {}) },
     fixedActual: { ...base.fixedActual, ...(saved.fixedActual || {}) },
     variableBudget: { ...base.variableBudget, ...(saved.variableBudget || {}) },
+    foodSubs: Array.isArray(saved.foodSubs) && saved.foodSubs.length ? saved.foodSubs : base.foodSubs,
   };
 }
 function sumValues(obj) { return Object.values(obj).reduce((a, b) => a + (Number(b) || 0), 0); }
@@ -157,10 +168,10 @@ function LedgerRow({ label, children }) {
 }
 
 // 支出1件の表示と編集（タップで編集欄が開く）
-function ExpenseItem({ e, showCategory, onSave, onDelete }) {
+function ExpenseItem({ e, showCategory, onSave, onDelete, options = VARIABLE_CATEGORIES, memoPlaceholder = "メモ（任意）" }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e);
-  const cat = VARIABLE_CATEGORIES.find(c => c.key === e.category);
+  const cat = options.find(c => c.key === e.category);
 
   function open() { setDraft({ ...e }); setEditing(true); }
   async function save() {
@@ -176,11 +187,11 @@ function ExpenseItem({ e, showCategory, onSave, onDelete }) {
         <div className="expense-form">
           <input type="date" value={draft.date} onChange={ev => setDraft(d => ({ ...d, date: ev.target.value }))} />
           <select value={draft.category} onChange={ev => setDraft(d => ({ ...d, category: ev.target.value }))}>
-            {VARIABLE_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            {options.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
           </select>
           <AmountInput name="amount" className="" placeholder="金額" value={draft.amount}
             onChange={v => setDraft(d => ({ ...d, amount: v }))} />
-          <input type="text" name="memo" placeholder="メモ（任意）" value={draft.memo || ""}
+          <input type="text" name="memo" placeholder={memoPlaceholder} value={draft.memo || ""}
             onChange={ev => setDraft(d => ({ ...d, memo: ev.target.value }))} />
         </div>
         <div className="edit-actions">
@@ -206,7 +217,7 @@ function ExpenseItem({ e, showCategory, onSave, onDelete }) {
 
 function CategoryProgress({
   label, budget, actual, readOnlyBudget, onBudgetChange, actualNode,
-  clickableLabel, expanded, onToggleLabel, detailItems, onSaveDetail, onDeleteDetail,
+  clickableLabel, expanded, onToggleLabel, detailItems, onSaveDetail, onDeleteDetail, detailNode,
 }) {
   const pct = budget > 0 ? Math.min(150, (actual / budget) * 100) : (actual > 0 ? 100 : 0);
   const over = budget > 0 && actual > budget;
@@ -239,13 +250,106 @@ function CategoryProgress({
       <div className="progress-track">
         <div className="progress-fill" style={{ width: `${Math.min(100, pct)}%`, background: barColor }} />
       </div>
-      {clickableLabel && expanded && (
+      {clickableLabel && expanded && detailNode}
+      {clickableLabel && expanded && !detailNode && (
         <div className="cat-detail">
           {(!detailItems || detailItems.length === 0) ? (
             <div className="empty-note-small">この月の記録はありません</div>
           ) : detailItems.map(e => (
             <ExpenseItem key={e.id} e={e} onSave={onSaveDetail} onDelete={onDeleteDetail} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 食費の明細：お店ごとの買い物を記録して月の合計を出す
+function FoodDetail({ subs, items, onAdd, onSave, onDelete, onChangeSubs }) {
+  const enabled = subs.filter(s => s.on || s.key === "food");
+  const split = enabled.length > 1;
+  const [form, setForm] = useState({ date: todayStr(), category: "food", amount: 0, memo: "" });
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const totals = {};
+  for (const e of items) totals[e.category] = (totals[e.category] || 0) + (Number(e.amount) || 0);
+  const total = Object.values(totals).reduce((a, b) => a + b, 0);
+  // 表示する内訳：オンのもの＋オフでもこの月に記録があるもの
+  const shown = subs.filter(s => s.on || s.key === "food" || totals[s.key]);
+  const category = enabled.some(s => s.key === form.category) ? form.category : "food";
+
+  async function add() {
+    const amount = Number(form.amount);
+    if (!form.date || !amount || amount <= 0) return;
+    await onAdd({ date: form.date, category, amount, memo: form.memo.trim() });
+    setForm(f => ({ ...f, amount: 0, memo: "" }));
+  }
+  function toggle(key) {
+    onChangeSubs(subs.map(s => s.key === key ? { ...s, on: !s.on } : s));
+  }
+  function addSub() {
+    const label = newName.trim();
+    if (!label) return;
+    onChangeSubs([...subs, { key: `food:c${Date.now().toString(36)}`, label, on: true }]);
+    setNewName("");
+  }
+
+  return (
+    <div className="cat-detail food-detail">
+      {split && (
+        <div className="food-totals">
+          {shown.map(s => (
+            <span key={s.key} className={"food-total-chip" + (s.on || s.key === "food" ? "" : " off")}>
+              {s.label} <b>¥{yen(totals[s.key] || 0)}</b>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="food-sum">この月の合計 <b>¥{yen(total)}</b>（{items.length}件）</div>
+
+      <div className="expense-form food-form">
+        <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+        <input type="text" name="memo" placeholder="お店（例：ヨーク）" value={form.memo}
+          onChange={e => setForm(f => ({ ...f, memo: e.target.value }))} />
+        <AmountInput name="amount" className="" placeholder="金額" value={form.amount}
+          onKeyDown={e => { if (e.key === "Enter") add(); }}
+          onChange={v => setForm(f => ({ ...f, amount: v }))} />
+        {split && (
+          <div className="sub-chips">
+            {enabled.map(s => (
+              <button type="button" key={s.key} className={"sub-chip" + (category === s.key ? " active" : "")}
+                onClick={() => setForm(f => ({ ...f, category: s.key }))}>{s.label}</button>
+            ))}
+          </div>
+        )}
+        <button type="button" className="add-btn" onClick={add}><Plus size={15} /> 追加する</button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="empty-note-small">この月の記録はまだありません</div>
+      ) : items.map(e => (
+        <ExpenseItem key={e.id} e={e} showCategory={split} options={subs} memoPlaceholder="お店"
+          onSave={onSave} onDelete={onDelete} />
+      ))}
+
+      <button type="button" className="setup-link" onClick={() => setSetupOpen(o => !o)}>
+        {setupOpen ? "閉じる" : "分け方を変える（食費・日用品・ペット費など）"}
+      </button>
+      {setupOpen && (
+        <div className="sub-setup">
+          <div className="backup-desc" style={{ margin: "0 0 6px" }}>使う項目にチェック。1つだけなら分けずに「食費」でまとめて記録します。オフにしても記録は消えません。</div>
+          {subs.map(s => (
+            <label key={s.key} className="sub-setup-row">
+              <input type="checkbox" checked={s.on || s.key === "food"} disabled={s.key === "food"} onChange={() => toggle(s.key)} />
+              <span>{s.label}</span>
+            </label>
+          ))}
+          <div className="sub-add">
+            <input type="text" placeholder="項目を追加（例：お酒）" value={newName} onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") addSub(); }} />
+            <button type="button" className="edit-cancel" onClick={addSub}>追加</button>
+          </div>
         </div>
       )}
     </div>
@@ -438,6 +542,17 @@ function Kakeibo({ email }) {
   }
 
   /* ---- 支出の追加・修正・削除 ---- */
+  async function addEntry(fields) {
+    const entry = { id: newId(), ...fields };
+    setExpenses(prev => sortExpenses([entry, ...prev]));
+    await guard(() => db.upsertExpenses([entry]));
+  }
+  function updateFoodSubs(next) {
+    const s2 = { ...settings, foodSubs: next };
+    setSettings(s2);
+    setHasSettings(true);
+    guard(() => db.saveSettings(s2));
+  }
   async function addExpense() {
     const amount = Number(form.amount);
     if (!form.date || !amount || amount <= 0) return;
@@ -475,10 +590,14 @@ function Kakeibo({ email }) {
   }
 
   /* ---- 集計 ---- */
-  const monthExpenses = useMemo(
+  const monthAll = useMemo(
     () => expenses.filter(x => monthKeyOf(x.date) === selectedMonth),
     [expenses, selectedMonth]
   );
+  const monthExpenses = useMemo(() => monthAll.filter(x => !isFood(x.category)), [monthAll]);
+  const foodItems = useMemo(() => monthAll.filter(x => isFood(x.category)), [monthAll]);
+  const foodTotal = foodItems.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const [foodOpen, setFoodOpen] = useState(false);
   const variableActuals = useMemo(() => {
     const acc = Object.fromEntries(VARIABLE_CATEGORIES.map(c => [c.key, 0]));
     for (const e of monthExpenses) if (acc[e.category] !== undefined) acc[e.category] += Number(e.amount) || 0;
@@ -488,7 +607,9 @@ function Kakeibo({ email }) {
   const incomeTotal = sumValues(monthData.income);
   const savingsTotal = sumValues(settings.savings);
   const fixedBudgetTotal = sumValues(settings.fixedBudget);
-  const fixedActualTotal = sumValues(settings.fixedActual);
+  // 固定費の実績：食費だけは「食費の明細」の月合計を使う（他は共通設定）
+  const fixedOtherTotal = sumValues(settings.fixedActual) - (Number(settings.fixedActual.food) || 0);
+  const fixedActualTotal = fixedOtherTotal + foodTotal;
   const variableBudgetTotal = sumValues(settings.variableBudget);
   const variableActualTotal = sumValues(variableActuals);
   const actualTotal = fixedActualTotal + variableActualTotal + savingsTotal;
@@ -501,26 +622,34 @@ function Kakeibo({ email }) {
     const rows = [];
     for (let i = 5; i >= 0; i--) {
       const m = shiftMonth(selectedMonth, -i);
-      const mExp = expenses.filter(e => monthKeyOf(e.date) === m);
-      const hasData = mExp.length > 0 || !!months[m] || m === selectedMonth;
-      const variable = mExp.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+      const mAll = expenses.filter(e => monthKeyOf(e.date) === m);
+      const hasData = mAll.length > 0 || !!months[m] || m === selectedMonth;
+      const sumOf = list => list.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+      const variable = sumOf(mAll.filter(e => !isFood(e.category)));
+      const food = sumOf(mAll.filter(e => isFood(e.category)));
       rows.push({
         month: shortMonthLabel(m), hasData, budget,
-        fixed: hasData ? fixedActualTotal : 0,
+        fixed: hasData ? fixedOtherTotal + food : 0,
         variable: hasData ? variable : 0,
         savings: hasData ? savingsTotal : 0,
       });
     }
     return rows;
-  }, [selectedMonth, expenses, months, fixedActualTotal, savingsTotal, fixedBudgetTotal, variableBudgetTotal]);
+  }, [selectedMonth, expenses, months, fixedOtherTotal, savingsTotal, fixedBudgetTotal, variableBudgetTotal]);
 
   const pieData = useMemo(() => {
     const rows = [];
-    FIXED_CATEGORIES.forEach(c => { if (settings.fixedActual[c.key] > 0) rows.push({ name: c.label, value: settings.fixedActual[c.key] }); });
+    FIXED_CATEGORIES.forEach(c => {
+      if (c.key === "food") {
+        const t = {};
+        for (const e of foodItems) t[e.category] = (t[e.category] || 0) + (Number(e.amount) || 0);
+        settings.foodSubs.forEach(s => { if (t[s.key] > 0) rows.push({ name: s.label, value: t[s.key] }); });
+      } else if (settings.fixedActual[c.key] > 0) rows.push({ name: c.label, value: settings.fixedActual[c.key] });
+    });
     VARIABLE_CATEGORIES.forEach(c => { if (variableActuals[c.key] > 0) rows.push({ name: c.label, value: variableActuals[c.key] }); });
     if (savingsTotal > 0) rows.push({ name: "積立資金", value: savingsTotal });
     return rows;
-  }, [settings.fixedActual, variableActuals, savingsTotal]);
+  }, [settings.fixedActual, settings.foodSubs, foodItems, variableActuals, savingsTotal]);
 
   const isEmpty = !hasSettings && expenses.length === 0 && Object.keys(months).length === 0;
 
@@ -593,7 +722,21 @@ function Kakeibo({ email }) {
             {/* 固定費 */}
             <div className="card">
               <SectionHeader icon={Receipt} title="固定費（毎月おおよそ一定）" />
-              {FIXED_CATEGORIES.map(c => (
+              {FIXED_CATEGORIES.map(c => c.key === "food" ? (
+                <CategoryProgress
+                  key={c.key} label={c.label}
+                  budget={settings.fixedBudget.food} actual={foodTotal}
+                  onBudgetChange={(v) => updateSettingsSection("fixedBudget", "food", v)}
+                  clickableLabel expanded={foodOpen} onToggleLabel={() => setFoodOpen(o => !o)}
+                  actualNode={!foodOpen && (
+                    <div className="food-hint" onClick={() => setFoodOpen(true)}>「食費」を押すと、お店ごとの買い物を記録できます</div>
+                  )}
+                  detailNode={
+                    <FoodDetail subs={settings.foodSubs} items={foodItems}
+                      onAdd={addEntry} onSave={saveExpense} onDelete={removeExpense} onChangeSubs={updateFoodSubs} />
+                  }
+                />
+              ) : (
                 <CategoryProgress
                   key={c.key} label={c.label}
                   budget={settings.fixedBudget[c.key]} actual={settings.fixedActual[c.key]}
